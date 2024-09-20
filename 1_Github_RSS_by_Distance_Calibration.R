@@ -84,7 +84,10 @@ source("4_Functions_RSS.Based.Localizations.R")
 
 ## Bring in 3 Needed files - Test Information, RSS values, and Node Information - change file names in " " as needed
 test.info <- read.csv("Test.Info_Example.csv", header = T)
-test.info <- read.csv()
+test.info <- read.csv("~/Downloads/cal_20m_up.csv")
+test.info$lat <- trunc(test.info$Latitude*10000)/10000
+test.info$lon <- trunc(test.info$Longitude*10000)/10000
+test.info$id <- paste(test.info$lat, test.info$lon, sep="_")
 
 str(test.info) # check that data imported properly
 
