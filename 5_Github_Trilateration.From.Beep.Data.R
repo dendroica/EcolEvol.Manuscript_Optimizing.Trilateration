@@ -93,7 +93,7 @@ source("Functions_RSS.Based.Localizations.R")
 
     
 
-    ##******* Define Variables - replace values below with user specified values *******## 
+    ##* Define Variables - replace values below with user specified values **## 
 
 TIMEZONE <- "Pacific/Guam"
 DATE.FORMAT <- "%m/%d/%y"
@@ -172,7 +172,7 @@ beep.filtered <- filter.dates(beep.data,tags)
 
 
 
-  ##******* Define Variables - replace values below with user specified values *******##
+  ##* Define Variables - replace values below with user specified values **##
 
 a <- 47.23 
 S <- 0.005
@@ -230,7 +230,7 @@ beep.grouped <- prep.data(beep.filtered,nodes)
 
 
 
-##******* Define Variables - replace values below with user specified values *******##
+##* Define Variables - replace values below with user specified values **##
 
 DIST.filter <- 350
 RSS.filter <- -90

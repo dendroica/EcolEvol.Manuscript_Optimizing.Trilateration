@@ -63,8 +63,6 @@
 ##  
 ##########################################################################################################################################################
 
-
-
 # Packages needed
 library(dplyr)
 library(lubridate)
@@ -73,24 +71,21 @@ library(ggplot2)
 # Reset R's brain - removes all previous objects
 rm(list=ls())
 
-
 ## Set by User
 # Working Directory - Provide/path/on/your/computer/where/master/csv/file/of/nodes/is/found/and/where/Functions_CTT.Network.R/is/located
-working.directory <- " add here "
+working.directory <- "/home/jess/Documents/radio_projects/EcolEvol.Manuscript_Optimizing.Trilateration"
 
 # Directory for Output data - Provide/path/where/you/want/output/data/to/be/stored/
-outpath <- " add here - make sure it ends with a /"
-
-
+outpath <- "/home/jess/Documents/radio_projects/paxton/"
 
 ## Bring in functions 
 setwd(working.directory)
-source("Functions_RSS.Based.Localizations.R")
-
-
+source("4_Functions_RSS.Based.Localizations.R")
 
 ## Bring in 3 Needed files - Test Information, RSS values, and Node Information - change file names in " " as needed
 test.info <- read.csv("Test.Info_Example.csv", header = T)
+test.info <- read.csv()
+
 str(test.info) # check that data imported properly
 
 beep.dat <- readRDS("BeepData_Example.rds") 
@@ -98,10 +93,6 @@ str(beep.dat) # check that data imported properly
 
 nodes <- read.csv("Nodes_Example.csv", header = T)
 str(nodes)
-
-
-
-
 
 #################################################################
 #   Step 1
@@ -134,7 +125,7 @@ str(nodes)
         ## Calibration_Dataset.csv - .csv file of the dataframe 'combine.data' saved in the folder specified by the outpath
 
 
-##******* Define Variables - replace values below with user specified values *******## 
+##* Define Variables - replace values below with user specified values **## 
 TEST.TYPE <- "Calibration"
 DATE.FORMAT <- "%m/%d/%y"
 TIME.ZONE <- "Pacific/Guam"
