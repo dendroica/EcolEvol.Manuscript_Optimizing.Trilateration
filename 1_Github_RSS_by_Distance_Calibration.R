@@ -67,6 +67,7 @@
 library(dplyr)
 library(lubridate)
 library(ggplot2)
+library(tidyr)
 
 # Reset R's brain - removes all previous objects
 rm(list=ls())
@@ -83,11 +84,42 @@ setwd(working.directory)
 source("4_Functions_RSS.Based.Localizations.R")
 
 ## Bring in 3 Needed files - Test Information, RSS values, and Node Information - change file names in " " as needed
-test.info <- read.csv("Test.Info_Example.csv", header = T)
-test.info <- read.csv("~/Downloads/cal_20m_up.csv")
-test.info$lat <- trunc(test.info$Latitude*10000)/10000
-test.info$lon <- trunc(test.info$Longitude*10000)/10000
-test.info$id <- paste(test.info$lat, test.info$lon, sep="_")
+test.info_k <- read.csv("Test.Info_Example.csv", header = T)
+test <- read.csv("~/Downloads/cal_20m_up.csv")
+test$Time <- as.POSIXct(test$Time..UTC., tz="UTC")
+test$lat <- format(trunc(test$Latitude*10000)/10000, nsmall=4)
+test$lon <- format(trunc(test$Longitude*10000)/10000, nsmall=4)
+test$id <- paste(test$lat, test$lon, sep="_")
+test <- test %>%
+  mutate(c_diff = ifelse(id != lag(id), 1, 0))
+test$c_diff[1] <- 0
+test$TestId <- cumsum(test$c_diff)
+
+library(data.table)
+test.info <- setDT(test)[, .(Start.Time = min(Time), Stop.Time = max(Time)), by = TestId]
+test.info$id <- test$id[match(test.info$TestId, test$TestId)]
+
+df1 <- test %>%
+  group_by(TestId) %>%
+  summarise(TagId = list(unique(Tag.Id))) %>%
+  unnest(TagId)
+
+test.info <- left_join(test.info, df1)
+testid <- test[!duplicated(test$id),]
+test.info$TestId <- testid$TestId[match(test.info$id, testid$id)]
+test.info$lat <- as.numeric(test$lat[match(test.info$TestId, test$TestId)])
+test.info$lon <- as.numeric(test$lon[match(test.info$TestId, test$TestId)])
+
+start <- min(test.info$Start.Time)
+end <- max(test.info$Stop.Time)
+con <- dbConnect(duckdb::duckdb(), dbdir = "/home/jess/Documents/radio_projects/data/radio_projects/office/my-db.duckdb", read_only = TRUE)
+testdata <- tbl(con, "blu") |>
+  filter(time >= start & time <= end) |>
+  collect()
+
+testdata$TestId <- 0L
+colnames(test.info)[colnames(test.info)=="TagId"] <- "tag_id"
+test.dat <- setDT(testdata)[test.info,  match := +(i.TestId), on = .(tag_id, time > Start.Time, time < Stop.Time), by = .EACHI]
 
 str(test.info) # check that data imported properly
 

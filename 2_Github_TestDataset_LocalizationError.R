@@ -105,8 +105,6 @@ str(beep.dat) # check that data imported properly
 nodes <- read.csv("Nodes_Example.csv", header = T)
 str(nodes)
 
-
-
 #################################################################
 #   Step 1
 # Run function to isolate raw RSS data from a node network that

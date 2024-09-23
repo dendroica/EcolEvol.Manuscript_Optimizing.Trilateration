@@ -49,7 +49,7 @@ beep.dat <- beep.dat %>%
 ## Isolate raw RSS values associated with the test data
 test.dat <- beep.dat %>%
   dplyr::filter(Tag.Date.HM %in% test.info$Tag.Date.HM) %>%
-  dplyr::left_join(test.info[,c("Tag.Date.HM", "TestId")])
+  dplyr::left_join(test.info[,c("Tag.Date.HM", "TestId")]) ##got to here JMG 9/23
 test.dat$NodeId <- droplevels(test.dat$NodeId)
 test.dat$TagId <- droplevels(test.dat$TagId)
 
