@@ -72,6 +72,19 @@ library(tidyr)
 # Reset R's brain - removes all previous objects
 rm(list=ls())
 
+node_file <- function(health) {
+  if (nrow(health) < 1) stop("no node health data!")
+  health$timediff <- as.integer(health$Time - health$RecordedAt)
+  health <- health[health$timediff == 0,]
+  health <- aggregate(health[,c("Latitude", "Longitude")],list(health$NodeId), mean, na.rm=TRUE)
+  if (any(is.na(health))) {health <- health[-which(is.na(health$Latitude) | is.na(health$Latitude)),]}
+  #
+  colnames(health)[colnames(health)=="Latitude"] <- "lat"
+  colnames(health)[colnames(health)=="Longitude"] <- "lng"
+  colnames(health)[colnames(health)=="Group.1"] <- "NodeId"
+  return(health)
+}
+
 ## Set by User
 # Working Directory - Provide/path/on/your/computer/where/master/csv/file/of/nodes/is/found/and/where/Functions_CTT.Network.R/is/located
 working.directory <- "/home/jess/Documents/radio_projects/EcolEvol.Manuscript_Optimizing.Trilateration"
@@ -107,24 +120,58 @@ df1 <- test %>%
 test.info <- left_join(test.info, df1)
 testid <- test[!duplicated(test$id),]
 test.info$TestId <- testid$TestId[match(test.info$id, testid$id)]
+
 test.info$lat <- as.numeric(test$lat[match(test.info$TestId, test$TestId)])
 test.info$lon <- as.numeric(test$lon[match(test.info$TestId, test$TestId)])
 
 start <- min(test.info$Start.Time)
 end <- max(test.info$Stop.Time)
-con <- dbConnect(duckdb::duckdb(), dbdir = "/home/jess/Documents/radio_projects/data/radio_projects/office/my-db.duckdb", read_only = TRUE)
+con <- DBI::dbConnect(duckdb::duckdb(), dbdir = "/home/jess/Documents/radio_projects/data/radio_projects/office/my-db.duckdb", read_only = TRUE)
 testdata <- tbl(con, "blu") |>
   filter(time >= start & time <= end) |>
   collect()
 
-testdata$TestId <- 0L
+start_buff = start - 2*60*60
+end_buff = end + 2*60*60
+
+nodes <- tbl(con, "node_health") |>
+  #filter(time >= start_buff  & time <= end_buff) |>
+  collect()
+
+DBI::dbDisconnect(con)
+#testdata$TestId <- 0L
 colnames(test.info)[colnames(test.info)=="TagId"] <- "tag_id"
-test.dat <- setDT(testdata)[test.info,  match := +(i.TestId), on = .(tag_id, time > Start.Time, time < Stop.Time), by = .EACHI]
+test.dat <- setDT(testdata)[test.info,  TestId := +(i.TestId), on = .(tag_id, time > Start.Time, time < Stop.Time), by = .EACHI]
+test.dat <- test.dat[!is.na(test.dat$TestId),]
+
+summary.test.tags <- test.dat %>%
+  dplyr::group_by(node_id, TestId) %>%
+  dplyr::summarise(avgRSS = mean(tag_rssi),
+                   sdRSS = sd(tag_rssi),
+                   n.det = n())
+
+test.UTM <- test.info %>%
+  dplyr::group_by(TestId) %>%
+  dplyr::slice_head(n=1)
+
+dst <- raster::pointDistance(test.UTM[,c("lat", "lon")], nodes[,c("NodeUTMx", "NodeUTMy")], lonlat = F, allpairs = T)
 
 str(test.info) # check that data imported properly
 
 beep.dat <- readRDS("BeepData_Example.rds") 
 str(beep.dat) # check that data imported properly
+
+nodeIds = c(
+  "B25AC19E",
+  "44F8E426",
+  "FAB6E12",
+  "1EE02113",
+  "565AA5B9",
+  "EE799439",
+  "1E762CF3",
+  "A837A3F4",
+  "484ED33B"
+)
 
 nodes <- read.csv("Nodes_Example.csv", header = T)
 str(nodes)
