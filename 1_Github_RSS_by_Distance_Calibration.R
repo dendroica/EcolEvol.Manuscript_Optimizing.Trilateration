@@ -74,14 +74,14 @@ rm(list=ls())
 
 node_file <- function(health) {
   if (nrow(health) < 1) stop("no node health data!")
-  health$timediff <- as.integer(health$Time - health$RecordedAt)
-  health <- health[health$timediff == 0,]
-  health <- aggregate(health[,c("Latitude", "Longitude")],list(health$NodeId), mean, na.rm=TRUE)
-  if (any(is.na(health))) {health <- health[-which(is.na(health$Latitude) | is.na(health$Latitude)),]}
+  health$timediff <- as.integer(health$time - health$recorded_at)
+  #health <- health[health$timediff == 0,]
+  health <- aggregate(health[,c("latitude", "longitude")],list(health$node_id), mean, na.rm=TRUE)
+  if (any(is.na(health))) {health <- health[-which(is.na(health$latitude) | is.na(health$longitude)),]}
   #
-  colnames(health)[colnames(health)=="Latitude"] <- "lat"
-  colnames(health)[colnames(health)=="Longitude"] <- "lng"
-  colnames(health)[colnames(health)=="Group.1"] <- "NodeId"
+  colnames(health)[colnames(health)=="latitude"] <- "node_lat"
+  colnames(health)[colnames(health)=="longitude"] <- "node_lng"
+  colnames(health)[colnames(health)=="Group.1"] <- "node_id"
   return(health)
 }
 
@@ -99,10 +99,12 @@ source("4_Functions_RSS.Based.Localizations.R")
 ## Bring in 3 Needed files - Test Information, RSS values, and Node Information - change file names in " " as needed
 test.info_k <- read.csv("Test.Info_Example.csv", header = T)
 test <- read.csv("~/Downloads/cal_20m_up.csv")
+test <- test[-which(test$Tag.Type=="userLocation"),]
 test$Time <- as.POSIXct(test$Time..UTC., tz="UTC")
-test$lat <- format(trunc(test$Latitude*10000)/10000, nsmall=4)
-test$lon <- format(trunc(test$Longitude*10000)/10000, nsmall=4)
+test$lat <- test$Latitude #format(trunc(test$Latitude*100000)/100000, nsmall=5)
+test$lon <- test$Longitude #format(trunc(test$Longitude*100000)/100000, nsmall=5)
 test$id <- paste(test$lat, test$lon, sep="_")
+test$syncid <- paste(format(test$Time, "%Y-%m-%d %H:%M"), test$beep_number, sep="_")
 test <- test %>%
   mutate(c_diff = ifelse(id != lag(id), 1, 0))
 test$c_diff[1] <- 0
@@ -126,20 +128,39 @@ test.info$lon <- as.numeric(test$lon[match(test.info$TestId, test$TestId)])
 
 start <- min(test.info$Start.Time)
 end <- max(test.info$Stop.Time)
-con <- DBI::dbConnect(duckdb::duckdb(), dbdir = "/home/jess/Documents/radio_projects/data/radio_projects/office/my-db.duckdb", read_only = TRUE)
+con <- DBI::dbConnect(duckdb::duckdb(), dbdir = "/home/jess/Documents/radio_projects/data/radio_projects/office/my-db.duckdb", read_only = FALSE)
 testdata <- tbl(con, "blu") |>
   filter(time >= start & time <= end) |>
   collect()
+
+testdata$syncid <- paste(format(testdata$time, "%Y-%m-%d %H:%M"), testdata$sync, sep="_")
 
 start_buff = start - 2*60*60
 end_buff = end + 2*60*60
 
 nodes <- tbl(con, "node_health") |>
-  #filter(time >= start_buff  & time <= end_buff) |>
+  filter(time >= start_buff  & time <= end_buff) |>
   collect()
 
 DBI::dbDisconnect(con)
 #testdata$TestId <- 0L
+
+nodeIds = c(
+  "B25AC19E",
+  "44F8E426",
+  "FAB6E12",
+  "1EE02113",
+  "565AA5B9",
+  "EE799439",
+  "1E762CF3",
+  "A837A3F4",
+  "484ED33B"
+)
+
+nodes <- nodes[nodes$node_id %in% nodeIds,]
+
+nodes <- node_file(nodes)
+
 colnames(test.info)[colnames(test.info)=="TagId"] <- "tag_id"
 test.dat <- setDT(testdata)[test.info,  TestId := +(i.TestId), on = .(tag_id, time > Start.Time, time < Stop.Time), by = .EACHI]
 test.dat <- test.dat[!is.na(test.dat$TestId),]
@@ -154,27 +175,34 @@ test.UTM <- test.info %>%
   dplyr::group_by(TestId) %>%
   dplyr::slice_head(n=1)
 
-dst <- raster::pointDistance(test.UTM[,c("lat", "lon")], nodes[,c("NodeUTMx", "NodeUTMy")], lonlat = F, allpairs = T)
+dst <- raster::pointDistance(test.UTM[,c("lon", "lat")], nodes[,c("node_lng", "node_lat")], lonlat = T, allpairs = T)
 
 str(test.info) # check that data imported properly
 
-beep.dat <- readRDS("BeepData_Example.rds") 
-str(beep.dat) # check that data imported properly
+#beep.dat <- readRDS("BeepData_Example.rds") 
+#str(beep.dat) # check that data imported properl
 
-nodeIds = c(
-  "B25AC19E",
-  "44F8E426",
-  "FAB6E12",
-  "1EE02113",
-  "565AA5B9",
-  "EE799439",
-  "1E762CF3",
-  "A837A3F4",
-  "484ED33B"
-)
+#nodes <- read.csv("Nodes_Example.csv", header = T)
+#str(nodes)
 
-nodes <- read.csv("Nodes_Example.csv", header = T)
-str(nodes)
+dist_df <- data.frame(dst, row.names = test.UTM$TestId)
+colnames(dist_df) <- nodes$node_id
+dist_df$TestId <- as.integer(rownames(dist_df))
+
+# rearrange data
+dist.gather <- dist_df %>%
+  tidyr::gather(key = "node_id", value = "distance", -TestId)
+
+
+## Combine distances with summary data 
+summary.dist <- summary.test.tags %>%
+  dplyr::left_join(dist.gather) 
+
+# Add UTMs of nodes and test locations to dataset
+combined.data <- summary.dist %>%
+  dplyr::left_join(nodes[, c("node_id", "node_lat", "node_lng")]) %>%
+  dplyr::left_join(test.UTM[, c("TestId", "lat", "lon")]) 
+
 
 #################################################################
 #   Step 1
@@ -208,18 +236,32 @@ str(nodes)
 
 
 ##* Define Variables - replace values below with user specified values **## 
-TEST.TYPE <- "Calibration"
-DATE.FORMAT <- "%m/%d/%y"
-TIME.ZONE <- "Pacific/Guam"
+#TEST.TYPE <- "Calibration"
+#DATE.FORMAT <- "%m/%d/%y"
+#TIME.ZONE <- "Pacific/Guam"
 
 
 # Combine RSS data from a node network with test information into a dataframe
-combined.data <- data.setup(TEST.TYPE, DATE.FORMAT, TIME.ZONE)
+#combined.data <- data.setup(TEST.TYPE, DATE.FORMAT, TIME.ZONE)
 
+atomic <- function(test, nodes, testdata) { #make sure these are the right data frames
+dst <- raster::pointDistance(test[,c("Longitude", "Latitude")], nodes[,c("node_lng", "node_lat")], lonlat = T, allpairs = T)
+dist_df <- data.frame(dst, row.names = test$syncid)
+colnames(dist_df) <- nodes$node_id
+dist_df$syncid <- rownames(dist_df)
 
+# rearrange data
+dist.gather <- dist_df %>%
+  tidyr::gather(key = "node_id", value = "distance", -syncid)
 
+summary.dist <- testdata %>% 
+  dplyr::left_join(dist.gather) 
 
-
+# Add UTMs of nodes and test locations to dataset
+combined.data <- summary.dist %>%
+  dplyr::left_join(nodes[, c("node_id", "node_lat", "node_lng")]) %>%
+  dplyr::left_join(test[, c("syncid", "lat", "lon")]) 
+}
 ##########################################################
 #    Step 2
 # Exponential Decay Function to Examine Relationship 
@@ -230,7 +272,7 @@ combined.data <- data.setup(TEST.TYPE, DATE.FORMAT, TIME.ZONE)
 ## Visualize data
 
   # Plot of the relationship between RSS and distance
-ggplot(data = combined.data, aes(x = distance, y = avgRSS, color = NodeId)) +
+ggplot(data = combined.data, aes(x = distance, y = avgRSS, color = node_id)) +
   geom_point(size = 2)
 
 
@@ -244,6 +286,7 @@ ggplot(data = combined.data, aes(x = distance, y = avgRSS, color = NodeId)) +
 
 
   # Preliminary Model
+combined.data <- combined.data[!is.na(combined.data$distance),]
 exp.mod <- nls(avgRSS ~ SSasymp(distance, Asym, R0, lrc), data = combined.data)
   # Summary of Model
 summary(exp.mod)
