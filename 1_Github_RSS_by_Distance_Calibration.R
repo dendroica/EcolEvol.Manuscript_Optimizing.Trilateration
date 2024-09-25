@@ -68,13 +68,14 @@ library(dplyr)
 library(lubridate)
 library(ggplot2)
 library(tidyr)
+library(data.table)
 
 # Reset R's brain - removes all previous objects
 rm(list=ls())
 
 node_file <- function(health) {
   if (nrow(health) < 1) stop("no node health data!")
-  health$timediff <- as.integer(health$time - health$recorded_at)
+  #health$timediff <- as.integer(health$time - health$recorded_at)
   #health <- health[health$timediff == 0,]
   health <- aggregate(health[,c("latitude", "longitude")],list(health$node_id), mean, na.rm=TRUE)
   if (any(is.na(health))) {health <- health[-which(is.na(health$latitude) | is.na(health$longitude)),]}
@@ -84,6 +85,132 @@ node_file <- function(health) {
   colnames(health)[colnames(health)=="Group.1"] <- "node_id"
   return(health)
 }
+
+out <- function(x, contents, timezone) {
+  x <- which(names(contents) == x)
+  timecol <- contents[, x]
+  if (is.character(timecol)) {
+    DatePattern <- "[[:digit:]]{4}-[[:digit:]]{2}-[[:digit:]]{2}[T, ][[:digit:]]{2}:[[:digit:]]{2}:[[:digit:]]{2}(.[[:digit:]]{3})?[Z]?"
+    exactDatePattern <- "^[[:digit:]]{4}-[[:digit:]]{2}-[[:digit:]]{2}[T, ][[:digit:]]{2}:[[:digit:]]{2}:[[:digit:]]{2}(.[[:digit:]]{3})?[Z]?$"
+    brokenrow <- grep(exactDatePattern, timecol, invert = TRUE) # find row that has a date embedded in a messed up string (i.e. interrupted rows)
+    timecol[brokenrow] <- substring(timecol[brokenrow], regexpr(DatePattern, timecol[brokenrow]))
+    timecol[brokenrow[which(regexpr(DatePattern, timecol[brokenrow]) < 0)]] <- NA
+    newtimecol <- as.POSIXct(timecol, tz = timezone)
+  } else {
+    newtimecol <- timecol
+  }
+  return(newtimecol)
+}
+
+#data.setup(test, tag_col="Tag.Id", tagid="0C5F5CED", time_col="Time..UTC.",timezone="UTC",x="Longitude",y="Latitude", node_ids=node_ids, loc_precision=4)
+
+tag_col <- "Tag.Id"
+tagid = "0C5F5CED"
+time_col="Time..UTC."
+timezone="UTC"
+x="Longitude"
+y="Latitude"
+loc_precision=4
+
+data.setup <- function(test, tag_col, tagid, time_col, timezone, x, y, node_ids = NA, loc_precision = NA, latlon=T) {
+  test$tag_id <- test[,tag_col]
+  test <- test[test$tag_id %in% tagid,]
+  outtime <- lapply(time_col, out, contents=test, timezone=timezone)
+  test[time_col] <- outtime
+  if(length(time_col) < 2) {
+    test$time <- test[,time_col]
+    if(is.na(loc_precision)) {
+      if(any(colnames(test) == "beep_number")) {
+        test$TestId <- seq(1:nrow(test))
+        test.info <- test
+       #paste(format(test$Time, "%Y-%m-%d %H:%M"), test$beep_number, sep="_")
+        test.info$Start.Time <- test.info$time - 1
+        test.info$Stop.Time <- test.info$time + 1
+        test.info$lat <- test[,y]
+        test.info$lon <- test[,x]
+      }
+    } else {
+      multfactor = 10^loc_precision
+      test$lat <- format(trunc(test[,y]*multfactor)/multfactor, nsmall=loc_precision)
+      test$lon <- format(trunc(test[,x]*multfactor)/multfactor, nsmall=loc_precision)
+      test$id <- paste(test$lat, test$lon, sep="_")
+      test <- test %>%
+        mutate(c_diff = ifelse(id != lag(id), 1, 0))
+      test$c_diff[1] <- 0
+      test$TestId <- cumsum(test$c_diff)
+      test.info <- setDT(test)[, .(Start.Time = min(time), Stop.Time = max(time)), by = TestId]
+      test.info$id <- test$id[match(test.info$TestId, test$TestId)]
+      testid <- test[!duplicated(test$id),]
+      test.info$TestId <- testid$TestId[match(test.info$id, testid$id)]
+      test.info$lat <- as.numeric(test$lat[match(test.info$TestId, test$TestId)])
+      test.info$lon <- as.numeric(test$lon[match(test.info$TestId, test$TestId)])
+    }
+  } else {
+    test.info <- test
+    test.info$lat <- test[,y]
+    test.info$lon <- test[,x]}
+  
+  test.UTM <- test.info %>%
+    dplyr::group_by(TestId) %>%
+    dplyr::slice_head(n=1)
+  
+  #if(length(tagid) > 1) {
+    df1 <- test %>%
+      group_by(TestId) %>%
+      summarise(tag_id = list(unique(tagid))) %>%
+      unnest(tag_id)
+    test.info <- left_join(test.info, df1) 
+  #}
+  
+  start <- min(test.info$Start.Time)
+  end <- max(test.info$Stop.Time)
+  
+  con <- DBI::dbConnect(duckdb::duckdb(), dbdir = "/home/jess/Documents/radio_projects/data/radio_projects/office/my-db.duckdb", read_only = TRUE)
+  testdata <- tbl(con, "blu") |>
+    filter(time >= start & time <= end) |>
+    filter(tag_id %in% tagid) |>
+    collect()
+  
+  #testdata$syncid <- paste(format(testdata$time, "%Y-%m-%d %H:%M"), testdata$sync, sep="_")
+  
+  start_buff = start - 2*60*60
+  end_buff = end + 2*60*60
+  
+  nodes <- tbl(con, "node_health") |>
+    filter(time >= start_buff  & time <= end_buff) |>
+    collect()
+  
+  DBI::dbDisconnect(con)
+  
+  test.dat <- setDT(testdata)[test.info,  TestId := +(i.TestId), on = .(tag_id, time > Start.Time, time < Stop.Time), by = .EACHI]
+  test.dat <- test.dat[!is.na(test.dat$TestId),]
+  
+  summary.test.tags <- test.dat %>%
+    dplyr::group_by(node_id, TestId) %>%
+    dplyr::summarise(avgRSS = mean(tag_rssi),
+                     sdRSS = sd(tag_rssi),
+                     n.det = n())
+  
+  if(any(!is.na(node_ids))) {nodes <- nodes[nodes$node_id %in% node_ids,]}
+  
+  nodes <- node_file(nodes)
+  
+  dst <- raster::pointDistance(test.UTM[,c("lon", "lat")], nodes[,c("node_lng", "node_lat")], lonlat = latlon, allpairs = T)
+  dist_df <- data.frame(dst, row.names = test.UTM$TestId)
+  colnames(dist_df) <- nodes$node_id
+  dist_df$TestId <- as.integer(rownames(dist_df))
+  
+  dist.gather <- dist_df %>%
+    tidyr::gather(key = "node_id", value = "distance", -TestId)
+  
+  summary.dist <- summary.test.tags %>%
+    dplyr::left_join(dist.gather) 
+  
+  # Add UTMs of nodes and test locations to dataset
+  combined.data <- summary.dist %>%
+    dplyr::left_join(nodes[, c("node_id", "node_lat", "node_lng")]) %>%
+    dplyr::left_join(test.UTM[, c("TestId", "lat", "lon")]) 
+return(combined.data)}
 
 ## Set by User
 # Working Directory - Provide/path/on/your/computer/where/master/csv/file/of/nodes/is/found/and/where/Functions_CTT.Network.R/is/located
@@ -96,56 +223,23 @@ outpath <- "/home/jess/Documents/radio_projects/paxton/"
 setwd(working.directory)
 source("4_Functions_RSS.Based.Localizations.R")
 
-## Bring in 3 Needed files - Test Information, RSS values, and Node Information - change file names in " " as needed
-test.info_k <- read.csv("Test.Info_Example.csv", header = T)
-test <- read.csv("~/Downloads/cal_20m_up.csv")
-test <- test[-which(test$Tag.Type=="userLocation"),]
-test$Time <- as.POSIXct(test$Time..UTC., tz="UTC")
-test$lat <- test$Latitude #format(trunc(test$Latitude*100000)/100000, nsmall=5)
-test$lon <- test$Longitude #format(trunc(test$Longitude*100000)/100000, nsmall=5)
-test$id <- paste(test$lat, test$lon, sep="_")
-test$syncid <- paste(format(test$Time, "%Y-%m-%d %H:%M"), test$beep_number, sep="_")
-test <- test %>%
-  mutate(c_diff = ifelse(id != lag(id), 1, 0))
-test$c_diff[1] <- 0
-test$TestId <- cumsum(test$c_diff)
+#re-sample data for calibration 
+#create time window by reducing location precision
+#or can input data with TestId column (user-defined window)
 
-library(data.table)
-test.info <- setDT(test)[, .(Start.Time = min(Time), Stop.Time = max(Time)), by = TestId]
-test.info$id <- test$id[match(test.info$TestId, test$TestId)]
+#INPUT
+#test DATA FRAME looks like...
+#tag_col, time_col, x, y, latlon=T
+#must pass Start.Time, Stop.Time, TestId if you pass your own
+#tagid = character or vector of tag ids
+#time_col = character or vector of time columns
+#timezone only applies to if your time column(s) are characters
 
-df1 <- test %>%
-  group_by(TestId) %>%
-  summarise(TagId = list(unique(Tag.Id))) %>%
-  unnest(TagId)
+#OUTPUT: combined/matched up data set
 
-test.info <- left_join(test.info, df1)
-testid <- test[!duplicated(test$id),]
-test.info$TestId <- testid$TestId[match(test.info$id, testid$id)]
+mytest <- read.csv("~/Downloads/cal_20m_up.csv")
 
-test.info$lat <- as.numeric(test$lat[match(test.info$TestId, test$TestId)])
-test.info$lon <- as.numeric(test$lon[match(test.info$TestId, test$TestId)])
-
-start <- min(test.info$Start.Time)
-end <- max(test.info$Stop.Time)
-con <- DBI::dbConnect(duckdb::duckdb(), dbdir = "/home/jess/Documents/radio_projects/data/radio_projects/office/my-db.duckdb", read_only = FALSE)
-testdata <- tbl(con, "blu") |>
-  filter(time >= start & time <= end) |>
-  collect()
-
-testdata$syncid <- paste(format(testdata$time, "%Y-%m-%d %H:%M"), testdata$sync, sep="_")
-
-start_buff = start - 2*60*60
-end_buff = end + 2*60*60
-
-nodes <- tbl(con, "node_health") |>
-  filter(time >= start_buff  & time <= end_buff) |>
-  collect()
-
-DBI::dbDisconnect(con)
-#testdata$TestId <- 0L
-
-nodeIds = c(
+node_ids = c(
   "B25AC19E",
   "44F8E426",
   "FAB6E12",
@@ -157,25 +251,17 @@ nodeIds = c(
   "484ED33B"
 )
 
-nodes <- nodes[nodes$node_id %in% nodeIds,]
+testout <- data.setup(mytest, tag_col="Tag.Id", tagid="0C5F5CED", time_col="Time..UTC.",timezone="UTC",x="Longitude",y="Latitude", node_ids=node_ids) #, loc_precision=4
 
-nodes <- node_file(nodes)
 
-colnames(test.info)[colnames(test.info)=="TagId"] <- "tag_id"
-test.dat <- setDT(testdata)[test.info,  TestId := +(i.TestId), on = .(tag_id, time > Start.Time, time < Stop.Time), by = .EACHI]
-test.dat <- test.dat[!is.na(test.dat$TestId),]
+## Bring in 3 Needed files - Test Information, RSS values, and Node Information - change file names in " " as needed
+#test.info_k <- read.csv("Test.Info_Example.csv", header = T)
 
-summary.test.tags <- test.dat %>%
-  dplyr::group_by(node_id, TestId) %>%
-  dplyr::summarise(avgRSS = mean(tag_rssi),
-                   sdRSS = sd(tag_rssi),
-                   n.det = n())
+#test <- test[-which(test$Tag.Type=="userLocation"),]
 
-test.UTM <- test.info %>%
-  dplyr::group_by(TestId) %>%
-  dplyr::slice_head(n=1)
 
-dst <- raster::pointDistance(test.UTM[,c("lon", "lat")], nodes[,c("node_lng", "node_lat")], lonlat = T, allpairs = T)
+
+#testdata$TestId <- 0L
 
 str(test.info) # check that data imported properly
 
@@ -185,23 +271,14 @@ str(test.info) # check that data imported properly
 #nodes <- read.csv("Nodes_Example.csv", header = T)
 #str(nodes)
 
-dist_df <- data.frame(dst, row.names = test.UTM$TestId)
-colnames(dist_df) <- nodes$node_id
-dist_df$TestId <- as.integer(rownames(dist_df))
+
 
 # rearrange data
-dist.gather <- dist_df %>%
-  tidyr::gather(key = "node_id", value = "distance", -TestId)
+
 
 
 ## Combine distances with summary data 
-summary.dist <- summary.test.tags %>%
-  dplyr::left_join(dist.gather) 
 
-# Add UTMs of nodes and test locations to dataset
-combined.data <- summary.dist %>%
-  dplyr::left_join(nodes[, c("node_id", "node_lat", "node_lng")]) %>%
-  dplyr::left_join(test.UTM[, c("TestId", "lat", "lon")]) 
 
 
 #################################################################
@@ -286,7 +363,7 @@ ggplot(data = combined.data, aes(x = distance, y = avgRSS, color = node_id)) +
 
 
   # Preliminary Model
-combined.data <- combined.data[!is.na(combined.data$distance),]
+#combined.data <- combined.data[!is.na(combined.data$distance),]
 exp.mod <- nls(avgRSS ~ SSasymp(distance, Asym, R0, lrc), data = combined.data)
   # Summary of Model
 summary(exp.mod)
@@ -306,10 +383,9 @@ exp(coef(exp.mod)[["lrc"]])
 
 
 ##  ***** Variables to define for final model below - replace values below with values from exp.mod ****  ## 
-a <- -59
-S <- 0.004561831
-K <- -104.63033
-
+a <- coef(exp.mod)[["R0"]]
+S <- exp(coef(exp.mod)[["lrc"]])
+K <- coef(exp.mod)[["Asym"]]
   
   # Final Model
 nls.mod <- nls(avgRSS ~ a * exp(-S * distance) + K, start = list(a = a, S = S, K= K), 
@@ -328,9 +404,9 @@ combined.data$E <- residuals(nls.mod)
 combined.data$fit <- fitted(nls.mod)
 
   # Plot residuals by fit or distance
-ggplot(combined.data, aes(x = distance, y = E, color = NodeId)) +
+ggplot(combined.data, aes(x = distance, y = E, color = node_id)) +
          geom_point(size = 2)
-ggplot(combined.data, aes(x = fit, y = E, color = NodeId)) +
+ggplot(combined.data, aes(x = fit, y = E, color = node_id)) +
   geom_point(size = 2)
 
   # Get model predictions
@@ -338,13 +414,13 @@ combined.data$pred <- predict(nls.mod)
 
 
 ## Save Final Dataset with Residuals and Predictions
-write.csv(combined.data, paste0(outpath, "Calibration_Dataset_withResiduals_Predictions.csv"),
-          row.names = F)
+#write.csv(combined.data, paste0(outpath, "Calibration_Dataset_withResiduals_Predictions.csv"),
+#          row.names = F)
 
 
 ## Plot with predicted line
 
-pdf(paste0(outpath, "Relationship_Distance~RSSI.pdf"), width = 8, height = 6)
+#pdf(paste0(outpath, "Relationship_Distance~RSSI.pdf"), width = 8, height = 6)
 
 ggplot(combined.data, aes(x = distance, y = avgRSS)) + 
   geom_point() +
@@ -353,7 +429,7 @@ ggplot(combined.data, aes(x = distance, y = avgRSS)) +
   scale_x_continuous(name = "Distance (m)") +
   theme_classic()
 
-dev.off()
+#dev.off()
 
 
 

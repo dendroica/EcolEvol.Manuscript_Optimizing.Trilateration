@@ -16,7 +16,7 @@
 ################################################################################
 
 
-data.setup <- function(TEST.TYPE, DATE.FORMAT, TIME.ZONE) {
+data.setupx <- function(TEST.TYPE, DATE.FORMAT, TIME.ZONE) {
 
 ## Prepare test info dataset
 
