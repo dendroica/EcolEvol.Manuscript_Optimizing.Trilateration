@@ -1,0 +1,2 @@
+packages <- c('devtools','ggplot2', 'dplyr', 'lubridate', 'tidyr', 'data.table', 'nlstools', 'RPostgres', 'duckdb', 'DBI', 'slider', 'padr', 'raster')
+install.packages(setdiff(packages, rownames(installed.packages())))

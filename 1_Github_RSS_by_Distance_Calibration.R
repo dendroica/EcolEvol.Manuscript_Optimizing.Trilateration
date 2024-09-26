@@ -1,68 +1,3 @@
-###########################################################################################################################################################
-##
-##  Kristina L Paxton
-##
-##  April 1 2021
-##
-##    Code to examine the relationship between RSS values and distance for a given study area using an exponential decay model
-##      -- Analysis in Ecology and Evolution Paper is based on data from a test with of a radio transmitter at 135 known locations distributed throughout the Guam Network 
-##         -- At each test location a transmitter was held stationary for a 5-minute time period 
-##            -- Removed first and last minute of each test to ensure that times matched between tests and the node network
-##            -- For each test, calculated an average RSS value for the 3-min middle time period individually for each node that detected the transmitter
-##        
-##
-##    1st step: Data preparation - isolates raw RSS data from node network that is associated with test data 
-##      -- Creates the data file that was published with this paper at: https://doi.org/10.5066/P94LQWIE 
-##            -- Data associated with this test is coded as 'A' in the column 'DataSet'
-##    2nd step: Exponential Decay Model - uses the dataset created in step 1 to examine the relationship between RSS values and distance for a node network
-##
-##
-##    Files Needed
-##        1. TestInfo.csv: file with test information that is saved in the working directory defined below
-##            - For each unique test location there should a row of information associated with each of the 3 inner minutes of that test
-##                - meaning that each test will have 3 rows of information with each row identifying one of the 3 inner minutes of the test (see TestInfo_Example.csv)
-##            - Columns
-##                -- TagId: unique identifier of the transmitter used during the specified test
-##                -- TestId: unique identifier given to each of the unique locations where a test was conducted
-##                -- Date: date when the specified test was conducted
-##                -- Start.Time: time when the specified test was started
-##                -- End.Time: time when the specified test was ended
-##                -- Min: 1-minute time period of the specified test
-##                -- Hour: hour of the the specified minute of the test
-##                -- TestUTMx: Easting location of the specified test 
-##                -- TestUTMy: Northing location of the specified test 
-##
-##       2. BeepData.rds: file with the raw RSS values collected by the node network during the time period of the test. The file should be saved in the working directory defined below
-##            -- output file from Import_beep.data.Github.R script (see BeepData_Example.rds)
-##            -- If using a file created from another source the following columns are needed in the specified format: 
-##                -- TagId: Factor identifying the unique code of a tag
-##                -- Time.local: POSIXct value in the format: "2021-12-29 09:02:51" that identifies the unique datetime stamp (IN THE LOCAL TIME ZONE OF THE STUDY) when the tag was detected by the specified node
-##                    ***** If you don't have a column with the local time, but only UTC time - then change lines 42-44 in Functions_RSS.Based.Localizations.R from 'Time.local' to 'Time' ************
-##                    ***** BUT be sure that Dates and Times in TestInfo.csv are also in UTC time and not local time *********
-##                -- NodeId: Factor identifying the node in the network that detected the specified tag
-##                -- TagRSSI: Integer indicating the RSS value (in dB) of the signal of the specified tag received by the specified node
-##
-##       3. Nodes.csv: file with a list of all nodes in your network and their UTM locations. The file should be saved in the working directory defined below
-##            - Columns
-##                -- NodeId: unique identifier of given to each node 
-#                 -- NodeUTMx: Easting location of the specified node
-##                -- NodeUTMy: Northing location of the specified node 
-##            - Other columns can also be in the file for your reference 
-##            - If Node names are being converted to scientific notation in Excel open the file with a text editor (e.g. BBedit) to change names to the correct format and save the file  
-## 
-##       4. Functions_RSS.Based.Localizations.R - R script with functions needed to run the code below - file should be saved in the working directory defined below    
-##      
-##  Important Output
-##      1. Calibration Dataset that contains the average RSS values for a given node that detected the signal of a test transmitter at a known location
-##      2. Model coefficients from an exponential decay model that show the relationship between RSS and Distance for a node network
-##            exponential model formula: avgRSS ~ a * exp(-S * distance) + K
-##                  a = intercept
-##                  S = decay factor
-##                  K = horizontal asymptote
-##
-##  
-##########################################################################################################################################################
-
 # Packages needed
 library(dplyr)
 library(lubridate)
@@ -122,8 +57,8 @@ source("Functions_Paxton-CTTUpdate.R")
 #  "484ED33B"
 #)
 
-mytest <- read.csv("~/Downloads/calibration_2023_8_2.csv")
-mytest$Time <- as.POSIXct(mytest$Time..UTC., tz="UTC")
+mytest <- read.csv("~/Downloads/calibration_2023_8_3_all.csv")
+mytest$Time <- as.POSIXct(mytest$time_utc, tz="UTC")
 start <- min(mytest$Time)
 end <- max(mytest$Time)
 
@@ -136,8 +71,8 @@ testdata <- tbl(con, "raw") |> #tbl(con, "blu") |>
 
 #testdata$syncid <- paste(format(testdata$time, "%Y-%m-%d %H:%M"), testdata$sync, sep="_")
 
-start_buff = start - 2*60*60
-end_buff = end + 2*60*60
+start_buff = as.Date("2023-08-01", tz="UTC") #start - 2*60*60
+end_buff = as.Date("2023-08-07", tz="UTC") #end + 2*60*60
 
 nodehealth <- tbl(con, "node_health") |>
   filter(time >= start_buff  & time <= end_buff) |>
@@ -148,7 +83,7 @@ DBI::dbDisconnect(con)
 nodes <- node_file(nodehealth)
 #nodes <- nodes[nodes$node_id %in% node_ids,]
 
-combined.data <- data.setup(mytest, testdata, nodes, tag_col="Tag.Id", tagid="072A6633", time_col="Time..UTC.",timezone="UTC",x="Longitude",y="Latitude", loc_precision=6, fileloc="/home/jess/Documents/radio_projects/data/radio_projects/meadows/meadows.duckdb", filetype="raw") #, loc_precision=4
+combined.data <- data.setup(mytest, testdata, nodes, tag_col="tag_id", tagid="072A6633", time_col="Time",timezone="UTC",x="lon",y="lat", loc_precision=6, fileloc="/home/jess/Documents/radio_projects/data/radio_projects/meadows/meadows.duckdb", filetype="raw") #, loc_precision=4
 ## Bring in 3 Needed files - Test Information, RSS values, and Node Information - change file names in " " as needed
 #test.info_k <- read.csv("Test.Info_Example.csv", header = T)
 
@@ -327,7 +262,7 @@ test_data <- testdata %>%
 
 # Function to prepare beep data for trilateration 
 # by estimating distance of a signal based on RSS values
-beep.grouped <- prep.data(test_data,nodes,SLIDE.TIME,GROUP.TIME,unname(coef(nls.mod)[3]), unname(coef(nls.mod)[1]), unname(coef(nls.mod)[2])) 
+beep.grouped <- prep.data(test_data,nodes,SLIDE.TIME,GROUP.TIME,K=unname(coef(nls.mod)[3]), a=unname(coef(nls.mod)[1]), S=unname(coef(nls.mod)[2])) 
 
 DIST.filter <- 350
 RSS.filter <- -95

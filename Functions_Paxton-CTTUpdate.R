@@ -1,3 +1,25 @@
+###########################################################################################################################################################
+## Jessica Gorzo & Kristina Paxton
+## 9/26/2024
+##
+## This is an updated version of the code base associated with Paxton et al. 2021 https://doi.org/10.5066/P94LQWIE 
+## Here's what's new...
+## 1. The methods for shaping and re-sampling a calibration data set have been updated with respect to inputting a CTT Sidekick input file, or more broadly,
+##    potentially with use for walking a transect and having a time stamp associated with a location, as opposed to specifying start and end time for a 
+##    location. Further, the methods for data shaping are updated to use time thresholds as bounds for matching recorded data
+##
+## 2. Functions have been redefined to more explicitly take passed input parameters, and there was some general code cleaning in keeping with R versioning 
+##    and e.g., related data type paradigms
+##
+## 3. Functionality has been included here to generate node locations from node health data
+##
+## 4. Variable naming conventions have been updated to reflect database headers (as opposed to raw or manually generated files)
+##
+## 5. Time formatting and cleaning for input files has been implemented
+##
+## 6. Location info has changed to the convention of lat/long
+##########################################################################################################################################################
+
 options(digits=9)
 node_file <- function(health) {
   if (nrow(health) < 1) stop("no node health data!")
@@ -40,6 +62,7 @@ out <- function(x, contents, timezone) {
 #fileloc <- "/home/jess/Documents/radio_projects/data/radio_projects/meadows/meadows.duckdb"
 data.setup <- function(test, testdata_in, nodes, tag_col, tagid, time_col, timezone, x, y, node_ids = NULL, loc_precision = NA, latlon=T, fileloc, filetype) {
   test$tag_id <- test[,tag_col]
+  #test$tag_id <- test[,tag_col]
   test <- test[test$tag_id %in% tagid,]
   outtime <- lapply(time_col, out, contents=test, timezone=timezone)
   test[time_col] <- outtime
