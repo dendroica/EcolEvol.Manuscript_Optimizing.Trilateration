@@ -152,7 +152,7 @@ beep.filtered <- filter.dates(beep.data,tags)
               ## a = intercept
               ## S = decay factor
               ## K = horizontal asymptote
-        ## SLIDE.TIME = number of minutes before or after an RSS value to include in the sliding window 
+        ## SLIDE.TIME = number of SECONDS before or after an RSS value to include in the sliding window 
               ## If you do not want to run a sliding window across RSS values indicate 0
         ## GROUP.TIME = number of minutes to average RSS values across
         
@@ -177,7 +177,7 @@ beep.filtered <- filter.dates(beep.data,tags)
 a <- 47.23 
 S <- 0.005
 K <- -105.16
-SLIDE.TIME <- 2
+SLIDE.TIME <- 1
 GROUP.TIME <- "1 min"
 
 

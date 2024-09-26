@@ -1415,7 +1415,7 @@ trilateration <- function(x) {
     
     
     # save estimated locations
-    saveRDS(estimated.location_results, paste0(outpath, "Estimated.Locations_", START, "_", END, ".rds"))
+    #saveRDS(estimated.location_results, paste0(outpath, "Estimated.Locations_", START, "_", END, ".rds"))
     
     
   }

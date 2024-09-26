@@ -73,145 +73,18 @@ library(data.table)
 # Reset R's brain - removes all previous objects
 rm(list=ls())
 
-node_file <- function(health) {
-  if (nrow(health) < 1) stop("no node health data!")
-  #health$timediff <- as.integer(health$time - health$recorded_at)
-  #health <- health[health$timediff == 0,]
-  health <- aggregate(health[,c("latitude", "longitude")],list(health$node_id), mean, na.rm=TRUE)
-  if (any(is.na(health))) {health <- health[-which(is.na(health$latitude) | is.na(health$longitude)),]}
-  #
-  colnames(health)[colnames(health)=="latitude"] <- "node_lat"
-  colnames(health)[colnames(health)=="longitude"] <- "node_lng"
-  colnames(health)[colnames(health)=="Group.1"] <- "node_id"
-  return(health)
-}
 
-out <- function(x, contents, timezone) {
-  x <- which(names(contents) == x)
-  timecol <- contents[, x]
-  if (is.character(timecol)) {
-    DatePattern <- "[[:digit:]]{4}-[[:digit:]]{2}-[[:digit:]]{2}[T, ][[:digit:]]{2}:[[:digit:]]{2}:[[:digit:]]{2}(.[[:digit:]]{3})?[Z]?"
-    exactDatePattern <- "^[[:digit:]]{4}-[[:digit:]]{2}-[[:digit:]]{2}[T, ][[:digit:]]{2}:[[:digit:]]{2}:[[:digit:]]{2}(.[[:digit:]]{3})?[Z]?$"
-    brokenrow <- grep(exactDatePattern, timecol, invert = TRUE) # find row that has a date embedded in a messed up string (i.e. interrupted rows)
-    timecol[brokenrow] <- substring(timecol[brokenrow], regexpr(DatePattern, timecol[brokenrow]))
-    timecol[brokenrow[which(regexpr(DatePattern, timecol[brokenrow]) < 0)]] <- NA
-    newtimecol <- as.POSIXct(timecol, tz = timezone)
-  } else {
-    newtimecol <- timecol
-  }
-  return(newtimecol)
-}
 
 #data.setup(test, tag_col="Tag.Id", tagid="0C5F5CED", time_col="Time..UTC.",timezone="UTC",x="Longitude",y="Latitude", node_ids=node_ids, loc_precision=4)
 
 tag_col <- "Tag.Id"
-tagid = "0C5F5CED"
+tagid = c("072A6633","2D4B782D") #"0C5F5CED"
 time_col="Time..UTC."
 timezone="UTC"
 x="Longitude"
 y="Latitude"
-loc_precision=4
-
-data.setup <- function(test, tag_col, tagid, time_col, timezone, x, y, node_ids = NA, loc_precision = NA, latlon=T) {
-  test$tag_id <- test[,tag_col]
-  test <- test[test$tag_id %in% tagid,]
-  outtime <- lapply(time_col, out, contents=test, timezone=timezone)
-  test[time_col] <- outtime
-  if(length(time_col) < 2) {
-    test$time <- test[,time_col]
-    if(is.na(loc_precision)) {
-      if(any(colnames(test) == "beep_number")) {
-        test$TestId <- seq(1:nrow(test))
-        test.info <- test
-       #paste(format(test$Time, "%Y-%m-%d %H:%M"), test$beep_number, sep="_")
-        test.info$Start.Time <- test.info$time - 1
-        test.info$Stop.Time <- test.info$time + 1
-        test.info$lat <- test[,y]
-        test.info$lon <- test[,x]
-      }
-    } else {
-      multfactor = 10^loc_precision
-      test$lat <- format(trunc(test[,y]*multfactor)/multfactor, nsmall=loc_precision)
-      test$lon <- format(trunc(test[,x]*multfactor)/multfactor, nsmall=loc_precision)
-      test$id <- paste(test$lat, test$lon, sep="_")
-      test <- test %>%
-        mutate(c_diff = ifelse(id != lag(id), 1, 0))
-      test$c_diff[1] <- 0
-      test$TestId <- cumsum(test$c_diff)
-      test.info <- setDT(test)[, .(Start.Time = min(time), Stop.Time = max(time)), by = TestId]
-      test.info$id <- test$id[match(test.info$TestId, test$TestId)]
-      testid <- test[!duplicated(test$id),]
-      test.info$TestId <- testid$TestId[match(test.info$id, testid$id)]
-      test.info$lat <- as.numeric(test$lat[match(test.info$TestId, test$TestId)])
-      test.info$lon <- as.numeric(test$lon[match(test.info$TestId, test$TestId)])
-    }
-  } else {
-    test.info <- test
-    test.info$lat <- test[,y]
-    test.info$lon <- test[,x]}
-  
-  test.UTM <- test.info %>%
-    dplyr::group_by(TestId) %>%
-    dplyr::slice_head(n=1)
-  
-  #if(length(tagid) > 1) {
-    df1 <- test %>%
-      group_by(TestId) %>%
-      summarise(tag_id = list(unique(tagid))) %>%
-      unnest(tag_id)
-    test.info <- left_join(test.info, df1) 
-  #}
-  
-  start <- min(test.info$Start.Time)
-  end <- max(test.info$Stop.Time)
-  
-  con <- DBI::dbConnect(duckdb::duckdb(), dbdir = "/home/jess/Documents/radio_projects/data/radio_projects/office/my-db.duckdb", read_only = TRUE)
-  testdata <- tbl(con, "blu") |>
-    filter(time >= start & time <= end) |>
-    filter(tag_id %in% tagid) |>
-    collect()
-  
-  #testdata$syncid <- paste(format(testdata$time, "%Y-%m-%d %H:%M"), testdata$sync, sep="_")
-  
-  start_buff = start - 2*60*60
-  end_buff = end + 2*60*60
-  
-  nodes <- tbl(con, "node_health") |>
-    filter(time >= start_buff  & time <= end_buff) |>
-    collect()
-  
-  DBI::dbDisconnect(con)
-  
-  test.dat <- setDT(testdata)[test.info,  TestId := +(i.TestId), on = .(tag_id, time > Start.Time, time < Stop.Time), by = .EACHI]
-  test.dat <- test.dat[!is.na(test.dat$TestId),]
-  
-  summary.test.tags <- test.dat %>%
-    dplyr::group_by(node_id, TestId) %>%
-    dplyr::summarise(avgRSS = mean(tag_rssi),
-                     sdRSS = sd(tag_rssi),
-                     n.det = n())
-  
-  if(any(!is.na(node_ids))) {nodes <- nodes[nodes$node_id %in% node_ids,]}
-  
-  nodes <- node_file(nodes)
-  
-  dst <- raster::pointDistance(test.UTM[,c("lon", "lat")], nodes[,c("node_lng", "node_lat")], lonlat = latlon, allpairs = T)
-  dist_df <- data.frame(dst, row.names = test.UTM$TestId)
-  colnames(dist_df) <- nodes$node_id
-  dist_df$TestId <- as.integer(rownames(dist_df))
-  
-  dist.gather <- dist_df %>%
-    tidyr::gather(key = "node_id", value = "distance", -TestId)
-  
-  summary.dist <- summary.test.tags %>%
-    dplyr::left_join(dist.gather) 
-  
-  # Add UTMs of nodes and test locations to dataset
-  combined.data <- summary.dist %>%
-    dplyr::left_join(nodes[, c("node_id", "node_lat", "node_lng")]) %>%
-    dplyr::left_join(test.UTM[, c("TestId", "lat", "lon")]) 
-return(combined.data)}
-
+#loc_precision=4
+options(digits=9)
 ## Set by User
 # Working Directory - Provide/path/on/your/computer/where/master/csv/file/of/nodes/is/found/and/where/Functions_CTT.Network.R/is/located
 working.directory <- "/home/jess/Documents/radio_projects/EcolEvol.Manuscript_Optimizing.Trilateration"
@@ -221,7 +94,7 @@ outpath <- "/home/jess/Documents/radio_projects/paxton/"
 
 ## Bring in functions 
 setwd(working.directory)
-source("4_Functions_RSS.Based.Localizations.R")
+source("Functions_Paxton-CTTUpdate.R")
 
 #re-sample data for calibration 
 #create time window by reducing location precision
@@ -237,23 +110,45 @@ source("4_Functions_RSS.Based.Localizations.R")
 
 #OUTPUT: combined/matched up data set
 
-mytest <- read.csv("~/Downloads/cal_20m_up.csv")
+#node_ids = c(
+#  "B25AC19E",
+#  "44F8E426",
+#  "FAB6E12",
+#  "1EE02113",
+#  "565AA5B9",
+#  "EE799439",
+#  "1E762CF3",
+#  "A837A3F4",
+#  "484ED33B"
+#)
 
-node_ids = c(
-  "B25AC19E",
-  "44F8E426",
-  "FAB6E12",
-  "1EE02113",
-  "565AA5B9",
-  "EE799439",
-  "1E762CF3",
-  "A837A3F4",
-  "484ED33B"
-)
+mytest <- read.csv("~/Downloads/calibration_2023_8_2.csv")
+mytest$Time <- as.POSIXct(mytest$Time..UTC., tz="UTC")
+start <- min(mytest$Time)
+end <- max(mytest$Time)
 
-testout <- data.setup(mytest, tag_col="Tag.Id", tagid="0C5F5CED", time_col="Time..UTC.",timezone="UTC",x="Longitude",y="Latitude", node_ids=node_ids) #, loc_precision=4
+con <- DBI::dbConnect(duckdb::duckdb(), dbdir = "/home/jess/Documents/radio_projects/data/radio_projects/meadows/meadows.duckdb", read_only = TRUE)
 
+testdata <- tbl(con, "raw") |> #tbl(con, "blu") |>
+  filter(time >= as.Date("2023-07-31") & time <= as.Date("2023-10-31")) |>
+  filter(tag_id %in% tagid) |>
+  collect()
 
+#testdata$syncid <- paste(format(testdata$time, "%Y-%m-%d %H:%M"), testdata$sync, sep="_")
+
+start_buff = start - 2*60*60
+end_buff = end + 2*60*60
+
+nodehealth <- tbl(con, "node_health") |>
+  filter(time >= start_buff  & time <= end_buff) |>
+  collect()
+
+DBI::dbDisconnect(con)
+
+nodes <- node_file(nodehealth)
+#nodes <- nodes[nodes$node_id %in% node_ids,]
+
+combined.data <- data.setup(mytest, testdata, nodes, tag_col="Tag.Id", tagid="072A6633", time_col="Time..UTC.",timezone="UTC",x="Longitude",y="Latitude", loc_precision=6, fileloc="/home/jess/Documents/radio_projects/data/radio_projects/meadows/meadows.duckdb", filetype="raw") #, loc_precision=4
 ## Bring in 3 Needed files - Test Information, RSS values, and Node Information - change file names in " " as needed
 #test.info_k <- read.csv("Test.Info_Example.csv", header = T)
 
@@ -263,7 +158,7 @@ testout <- data.setup(mytest, tag_col="Tag.Id", tagid="0C5F5CED", time_col="Time
 
 #testdata$TestId <- 0L
 
-str(test.info) # check that data imported properly
+#str(test.info) # check that data imported properly
 
 #beep.dat <- readRDS("BeepData_Example.rds") 
 #str(beep.dat) # check that data imported properl
@@ -321,24 +216,7 @@ str(test.info) # check that data imported properly
 # Combine RSS data from a node network with test information into a dataframe
 #combined.data <- data.setup(TEST.TYPE, DATE.FORMAT, TIME.ZONE)
 
-atomic <- function(test, nodes, testdata) { #make sure these are the right data frames
-dst <- raster::pointDistance(test[,c("Longitude", "Latitude")], nodes[,c("node_lng", "node_lat")], lonlat = T, allpairs = T)
-dist_df <- data.frame(dst, row.names = test$syncid)
-colnames(dist_df) <- nodes$node_id
-dist_df$syncid <- rownames(dist_df)
 
-# rearrange data
-dist.gather <- dist_df %>%
-  tidyr::gather(key = "node_id", value = "distance", -syncid)
-
-summary.dist <- testdata %>% 
-  dplyr::left_join(dist.gather) 
-
-# Add UTMs of nodes and test locations to dataset
-combined.data <- summary.dist %>%
-  dplyr::left_join(nodes[, c("node_id", "node_lat", "node_lng")]) %>%
-  dplyr::left_join(test[, c("syncid", "lat", "lon")]) 
-}
 ##########################################################
 #    Step 2
 # Exponential Decay Function to Examine Relationship 
@@ -431,6 +309,28 @@ ggplot(combined.data, aes(x = distance, y = avgRSS)) +
 
 #dev.off()
 
+combined.data <- estimate.distance(combined.data, unname(coef(nls.mod)[3]), unname(coef(nls.mod)[1]), unname(coef(nls.mod)[2]))
+no.filters <- trilateration.TestData.NoFilter(combined.data)
+RSS.FILTER <- c(-80, -85, -90, -95)
+RSS.filters <- trilateration.TestData.RSS.Filter(combined.data, RSS.FILTER)
+DIST.FILTER <- c(315,500,750,1000)
+# Calculate error of location estimates of each test location when Distance filters are applied prior to trilateration 
+Dist.filters <- trilateration.TestData.Distance.Filter(combined.data, DIST.FILTER)
 
+SLIDE.TIME <- 2
+GROUP.TIME <- "1 min"
+
+test_data <- testdata %>%
+  filter(time >= as.Date("2023-10-05") & time <= as.Date("2023-10-15")) %>%
+  filter(tag_id == "2D4B782D") %>%
+  collect()
+
+# Function to prepare beep data for trilateration 
+# by estimating distance of a signal based on RSS values
+beep.grouped <- prep.data(test_data,nodes,SLIDE.TIME,GROUP.TIME,unname(coef(nls.mod)[3]), unname(coef(nls.mod)[1]), unname(coef(nls.mod)[2])) 
+
+DIST.filter <- 350
+RSS.filter <- -95
+location.estimates <- trilateration(beep.grouped, nodes, RSS.FILTER, DIST.FILTER)
 
 
